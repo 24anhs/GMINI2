@@ -1,82 +1,82 @@
 import os
-import re
 from flask import Flask, request
 import requests
 
 app = Flask(__name__)
 
-# --- הגדרות - שנה אותן לפרטים שלך ---
-YM_TOKEN = "WU1BUElL.apik_2sU68M3Qf0YLc5sfbFHwqg.moW0wkZECzfri1X3gICwp4cs7k7ctLvA2DWIEmfTf8c"  # הטוקן שלך מימות המשיח
-TEMPLATE_ID = "1387640"           # מזהה רשימת התפוצה שלך
-
+# הגדרות (מומלץ להגדיר ב-Environment של Render)
+YM_TOKEN = os.environ.get('YM_TOKEN', 'YOUR_TOKEN_HERE')
 YM_API_URL = "https://www.call2all.co.il/ym/api/"
-
-def get_phone_from_filename(filename):
-    """
-    מחלץ את מספר הטלפון משם הקובץ.
-    קבצי הקלטה בימות נראים בדרך כלל כך: M1234-0501234567.wav
-    """
-    match = re.search(r'-(\d+)\.', filename)
-    if match:
-        return match.group(1)
-    return None
+TEMPLATE_ID = os.environ.get('TEMPLATE_ID', '1')
 
 @app.route('/process_record', methods=['GET', 'POST'])
 def process_record():
-    # 1. קבלת נתונים מימות המשיח
-    # ימות המשיח שולחים את שם הקובץ המתנגן בפרמטר ApiFile
-    current_file = request.args.get('ApiFile', '')
+    # 1. קבלת נתיב הקובץ שמתנגן כרגע (למשל ivr2:/3/000.wav)
+    what = request.args.get('what', '')
     
-    if not current_file:
-        return "say_hebrew=שגיאה, לא נמצא קובץ מתנגן&hangup"
+    if not what:
+        return "say_hebrew=לא זוהה קובץ מתנגן&hangup"
 
-    phone_to_check = get_phone_from_filename(current_file)
+    # 2. הפיכת הנתיב לנתיב של קובץ ה-txt (החלפת .wav ב-.txt)
+    # אנחנו צריכים להסיר את הקידומת ivr2: אם היא קיימת
+    clean_path = what.replace('ivr2:', '')
+    txt_path = clean_path.replace('.wav', '.txt')
     
-    if not phone_to_check:
-        return "say_hebrew=שגיאה בחילוץ מספר הטלפון&hangup"
+    print(f"DEBUG: Trying to read phone from: {txt_path}")
 
-    # 2. בדיקה האם המספר קיים ברשימה
-    check_url = f"{YM_API_URL}GetTemplateList"
-    check_params = {
+    # 3. קריאת תוכן קובץ ה-txt מימות המשיח
+    read_url = f"{YM_API_URL}DownloadFile"
+    read_params = {
         'token': YM_TOKEN,
-        'templateId': TEMPLATE_ID,
-        'filter[phone]': phone_to_check
+        'path': txt_path
     }
     
-    response = requests.get(check_url, params=check_params).json()
-    
-    # 3. לוגיקת הוספה / חסימה
-    update_url = f"{YM_API_URL}UpdateTemplateList"
-    
-    # אם ברשימת הנתונים שחזרה יש איברים, סימן שהמספר קיים
-    is_exists = len(response.get('data', [])) > 0
+    try:
+        file_res = requests.get(read_url, params=read_params)
+        phone_to_check = file_res.text.strip() # המספר שנמצא בתוך הקובץ
+        
+        # ניקוי תווים לא רצויים אם יש
+        phone_to_check = "".join(filter(str.isdigit, phone_to_check))
 
-    if not is_exists:
-        # מקרה א': לא קיים -> הוספה כפעיל
-        action_params = {
+        print(f"DEBUG: Phone extracted from TXT: {phone_to_check}")
+
+        if not phone_to_check or len(phone_to_check) < 7:
+            return "say_hebrew=לא נמצא מספר טלפון תקין בקובץ הטקסט&hangup"
+
+        # 4. בדיקה ועדכון ברשימת התפוצה (כמו קודם)
+        check_url = f"{YM_API_URL}GetTemplateList"
+        check_params = {
             'token': YM_TOKEN,
             'templateId': TEMPLATE_ID,
-            'phone': phone_to_check,
-            'active': '1', # 1 = פעיל
-            'action': 'add'
+            'filter[phone]': phone_to_check
         }
-        msg = "המספר נוסף בהצלחה לרשימה"
-    else:
-        # מקרה ב': קיים -> עדכון לחסום
-        action_params = {
-            'token': YM_TOKEN,
-            'templateId': TEMPLATE_ID,
-            'phone': phone_to_check,
-            'active': '0', # 0 = חסום/לא פעיל
-            'action': 'update'
-        }
-        msg = "המספר היה קיים וכעת עודכן כחסום"
+        
+        response = requests.get(check_url, params=check_params).json()
+        
+        # בימות המשיח התשובה נמצאת ב-data או fullData תלוי בגרסה
+        is_exists = response.get('data') and len(response.get('data')) > 0
+        
+        update_url = f"{YM_API_URL}UpdateTemplateList"
+        
+        if not is_exists:
+            action_params = {
+                'token': YM_TOKEN, 'templateId': TEMPLATE_ID,
+                'phone': phone_to_check, 'active': '1', 'action': 'add'
+            }
+            msg = "המספר של המקליט נוסף לרשימה"
+        else:
+            action_params = {
+                'token': YM_TOKEN, 'templateId': TEMPLATE_ID,
+                'phone': phone_to_check, 'active': '0', 'action': 'update'
+            }
+            msg = "המספר של המקליט עודכן כחסום"
 
-    # ביצוע הפעולה מול ימות המשיח
-    requests.get(update_url, params=action_params)
+        requests.get(update_url, params=action_params)
+        return f"say_hebrew={msg}&hangup"
 
-    # החזרת תשובה קולית למחייג
-    return f"say_hebrew={msg}&go_to_folder=."
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        return "say_hebrew=שגיאה בתהליך חילוץ הנתונים&hangup"
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run()
