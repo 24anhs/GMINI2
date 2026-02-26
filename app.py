@@ -6,36 +6,33 @@ import requests
 app = Flask(__name__)
 
 # --- הגדרות מערכת ---
-# הטוקן ומזהה הרשימה כפי שסיפקת
 YM_TOKEN = "WU1BUElL.apik_owJJz4IQ1z0pa_O-scE6rw.NTXls1kFwOLUwwYefyEXXFszW7y-qYl29gQVsVZU4d4"
 TEMPLATE_ID = "1387640"
 YM_API_URL = "https://www.call2all.co.il/ym/api/"
 
 @app.route('/process_record', methods=['GET', 'POST'])
 def process_record():
-    # 1. קבלת נתיב הקובץ
+    # 1. קבלת נתיב הקובץ (למשל ivr2:/3/000.wav)
     what = request.args.get('what', '')
     if not what:
         return "say_hebrew=שגיאה בפרמטרים&hangup=yes"
 
     # 2. ניקוי נתיב ובניית כתובת לקובץ ה-TXT
-    # הסרת קידומות ימות המשיח כדי לקבל נתיב נקי
     clean_path = what.replace('ivr2:', '').replace('ivr:', '')
     if not clean_path.startswith('/'):
         clean_path = '/' + clean_path
     
-    # הוספת ivr/ בתחילת הנתיב לצורך הורדה ב-API
     txt_path = 'ivr' + clean_path.replace('.wav', '.txt')
     
     try:
-        # 3. הורדת תוכן קובץ ה-TXT
+        # 3. הורדת תוכן קובץ ה-TXT מימות המשיח
         file_res = requests.get(f"{YM_API_URL}DownloadFile", params={
             'token': YM_TOKEN, 
             'path': txt_path
         })
         raw_content = file_res.text.strip()
         
-        # 4. חילוץ מספר הטלפון בעזרת Regex (מחפש את מה שאחרי Phone-)
+        # 4. חילוץ מספר הטלפון (0527154390) מתוך המחרוזת המורכבת
         match = re.search(r'Phone-(\d+)', raw_content)
         
         if not match:
@@ -43,23 +40,22 @@ def process_record():
             
         phone_to_check = match.group(1)
 
-        # 5. בדיקה האם קיים ברשימת התפוצה
+        # 5. בדיקה ברשימת התפוצה
         check_res = requests.get(f"{YM_API_URL}GetTemplateList", params={
             'token': YM_TOKEN, 
             'templateId': TEMPLATE_ID, 
             'filter[phone]': phone_to_check
         }).json()
         
-        # זיהוי אם המספר קיים
         is_exists = check_res.get('data') and len(check_res.get('data')) > 0
         
-        # 6. הגדרת פעולה: הוספה כחדש (1) או עדכון לחסום (0)
+        # 6. קביעת פעולה
         if not is_exists:
             action, active_val, msg = 'add', '1', "המספר נוסף בהצלחה"
         else:
             action, active_val, msg = 'update', '0', "המספר עודכן כחסום"
 
-        # ביצוע העדכון בפועל בימות המשיח
+        # 7. ביצוע העדכון בפועל
         requests.get(f"{YM_API_URL}UpdateTemplateList", params={
             'token': YM_TOKEN, 
             'templateId': TEMPLATE_ID, 
@@ -68,11 +64,10 @@ def process_record():
             'action': action
         })
 
-        # החזרת פקודה קולית בפורמט שימות המשיח מבינים (עם = ו-&)
+        # החזרת תשובה בפורמט תקני עבור ימות המשיח
         return f"say_hebrew={msg}&hangup=yes"
 
     except Exception as e:
-        print(f"Error: {str(e)}")
         return "say_hebrew=שגיאה בתקשורת הנתונים&hangup=yes"
 
 if __name__ == '__main__':
