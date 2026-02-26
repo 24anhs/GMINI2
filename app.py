@@ -57,7 +57,7 @@ def process_record():
             'phone': phone_to_check, 'active': active_val, 'action': action
         })
 
-        return f"say_hebrew={msg}&hangup"
+return f"say_hebrew={msg}&hangup=yes"
 
     except Exception as e:
         print(f"ERROR: {str(e)}")
