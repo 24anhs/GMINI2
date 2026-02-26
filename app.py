@@ -6,8 +6,8 @@ import requests
 app = Flask(__name__)
 
 # --- הגדרות - שנה אותן לפרטים שלך ---
-YM_TOKEN = "YOUR_YM_TOKEN"  # הטוקן שלך מימות המשיח
-TEMPLATE_ID = "1"           # מזהה רשימת התפוצה שלך
+YM_TOKEN = "WU1BUElL.apik_2sU68M3Qf0YLc5sfbFHwqg.moW0wkZECzfri1X3gICwp4cs7k7ctLvA2DWIEmfTf8c"  # הטוקן שלך מימות המשיח
+TEMPLATE_ID = "1387640"           # מזהה רשימת התפוצה שלך
 
 YM_API_URL = "https://www.call2all.co.il/ym/api/"
 
