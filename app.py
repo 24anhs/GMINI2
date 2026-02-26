@@ -12,12 +12,20 @@ YM_API_URL = "https://www.call2all.co.il/ym/api/"
 
 @app.route('/process_record', methods=['GET', 'POST'])
 def process_record():
-    # 1. קבלת נתיב הקובץ (למשל ivr2:/3/000.wav)
-    what = request.args.get('what', '')
+    # 1. שליפת נתיב הקובץ (מטפל גם בסימני ^ וגם ב- =)
+    what = request.args.get('what')
     if not what:
-        return "say_hebrew=שגיאה בפרמטרים&hangup=yes"
+        # בדיקה ידנית ב-URL למקרה שהפרמטרים הגיעו משובשים מהמערכת
+        full_url = request.url
+        match_what = re.search(r'what[\^=]([^&*]+)', full_url)
+        if match_what:
+            what = match_what.group(1)
 
-    # 2. ניקוי נתיב ובניית כתובת לקובץ ה-TXT
+    if not what:
+        print(f"DEBUG: Could not find 'what' in URL: {request.url}")
+        return "say_hebrew=שגיאה בזיהוי הקובץ&hangup=yes"
+
+    # 2. ניקוי הנתיב ובניית כתובת לקובץ ה-TXT
     clean_path = what.replace('ivr2:', '').replace('ivr:', '')
     if not clean_path.startswith('/'):
         clean_path = '/' + clean_path
@@ -31,14 +39,17 @@ def process_record():
             'path': txt_path
         })
         raw_content = file_res.text.strip()
-        
-        # 4. חילוץ מספר הטלפון (0527154390) מתוך המחרוזת המורכבת
+        print(f"DEBUG: Content from file: {raw_content}")
+
+        # 4. חילוץ מספר הטלפון מתוך התבנית ConfBridge-...-Phone-052...
         match = re.search(r'Phone-(\d+)', raw_content)
         
         if not match:
-            return "say_hebrew=לא נמצא מספר טלפון תקין בקובץ&hangup=yes"
+            print("DEBUG: Phone pattern not found in text")
+            return "say_hebrew=לא נמצא מספר טלפון תקין בקובץ המקליט&hangup=yes"
             
         phone_to_check = match.group(1)
+        print(f"DEBUG: Extracted phone: {phone_to_check}")
 
         # 5. בדיקה ברשימת התפוצה
         check_res = requests.get(f"{YM_API_URL}GetTemplateList", params={
@@ -49,25 +60,27 @@ def process_record():
         
         is_exists = check_res.get('data') and len(check_res.get('data')) > 0
         
-        # 6. קביעת פעולה
+        # 6. הגדרת הפעולה
         if not is_exists:
             action, active_val, msg = 'add', '1', "המספר נוסף בהצלחה"
         else:
             action, active_val, msg = 'update', '0', "המספר עודכן כחסום"
 
         # 7. ביצוע העדכון בפועל
-        requests.get(f"{YM_API_URL}UpdateTemplateList", params={
+        update_res = requests.get(f"{YM_API_URL}UpdateTemplateList", params={
             'token': YM_TOKEN, 
             'templateId': TEMPLATE_ID, 
             'phone': phone_to_check, 
             'active': active_val, 
             'action': action
-        })
+        }).json()
+        print(f"DEBUG: Yemot update response: {update_res}")
 
-        # החזרת תשובה בפורמט תקני עבור ימות המשיח
+        # 8. החזרת תשובה בפורמט תקני (שימוש ב- = וב- &)
         return f"say_hebrew={msg}&hangup=yes"
 
     except Exception as e:
+        print(f"ERROR: {str(e)}")
         return "say_hebrew=שגיאה בתקשורת הנתונים&hangup=yes"
 
 if __name__ == '__main__':
