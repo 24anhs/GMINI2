@@ -4,46 +4,48 @@ import requests
 
 app = Flask(__name__)
 
-# הגדרות (מומלץ להגדיר ב-Environment של Render)
-YM_TOKEN = os.environ.get('YM_TOKEN', 'YOUR_TOKEN_HERE')
+# --- הגדרות מערכת ---
+YM_TOKEN = "WU1BUElL.apik_owJJz4IQ1z0pa_O-scE6rw.NTXls1kFwOLUwwYefyEXXFszW7y-qYl29gQVsVZU4d4"
+TEMPLATE_ID = "1387640"
 YM_API_URL = "https://www.call2all.co.il/ym/api/"
-TEMPLATE_ID = os.environ.get('TEMPLATE_ID', '1')
 
 @app.route('/process_record', methods=['GET', 'POST'])
 def process_record():
-    # 1. קבלת נתיב הקובץ שמתנגן כרגע (למשל ivr2:/3/000.wav)
+    # 1. קבלת נתיב הקובץ מהפרמטר 'what' (למשל ivr2:/3/000.wav)
     what = request.args.get('what', '')
+    print(f"DEBUG: Received 'what' parameter: {what}")
     
     if not what:
-        return "say_hebrew=לא זוהה קובץ מתנגן&hangup"
+        print("DEBUG: No 'what' parameter found.")
+        return "say_hebrew=שגיאה, לא זוהה קובץ מתנגן&hangup"
 
-    # 2. הפיכת הנתיב לנתיב של קובץ ה-txt (החלפת .wav ב-.txt)
-    # אנחנו צריכים להסיר את הקידומת ivr2: אם היא קיימת
+    # 2. בניית נתיב לקובץ ה-TXT
+    # מסירים ivr2: ומחליפים סיומת
     clean_path = what.replace('ivr2:', '')
-    txt_path = clean_path.replace('.wav', '.txt')
+    if not clean_path.startswith('/'):
+        clean_path = '/' + clean_path
     
-    print(f"DEBUG: Trying to read phone from: {txt_path}")
+    # בימות המשיח, כשניגשים ב-API, הנתיב צריך להתחיל ב-ivr/
+    txt_path = 'ivr' + clean_path.replace('.wav', '.txt')
+    print(f"DEBUG: Calculated TXT path: {txt_path}")
 
-    # 3. קריאת תוכן קובץ ה-txt מימות המשיח
-    read_url = f"{YM_API_URL}DownloadFile"
-    read_params = {
-        'token': YM_TOKEN,
-        'path': txt_path
-    }
-    
+    # 3. הורדת תוכן קובץ ה-TXT
     try:
-        file_res = requests.get(read_url, params=read_params)
-        phone_to_check = file_res.text.strip() # המספר שנמצא בתוך הקובץ
+        read_url = f"{YM_API_URL}DownloadFile"
+        file_res = requests.get(read_url, params={'token': YM_TOKEN, 'path': txt_path})
         
-        # ניקוי תווים לא רצויים אם יש
-        phone_to_check = "".join(filter(str.isdigit, phone_to_check))
+        raw_content = file_res.text.strip()
+        print(f"DEBUG: Raw content from file: '{raw_content}'")
 
-        print(f"DEBUG: Phone extracted from TXT: {phone_to_check}")
+        # חילוץ ספרות בלבד (מספר הטלפון)
+        phone_to_check = "".join(filter(str.isdigit, raw_content))
+        print(f"DEBUG: Extracted phone number: {phone_to_check}")
 
         if not phone_to_check or len(phone_to_check) < 7:
-            return "say_hebrew=לא נמצא מספר טלפון תקין בקובץ הטקסט&hangup"
+            print("DEBUG: Failed to extract a valid phone number.")
+            return "say_hebrew=לא נמצא מספר טלפון תקין בקובץ המקליט&hangup"
 
-        # 4. בדיקה ועדכון ברשימת התפוצה (כמו קודם)
+        # 4. בדיקה ברשימת התפוצה
         check_url = f"{YM_API_URL}GetTemplateList"
         check_params = {
             'token': YM_TOKEN,
@@ -51,32 +53,39 @@ def process_record():
             'filter[phone]': phone_to_check
         }
         
-        response = requests.get(check_url, params=check_params).json()
+        check_res = requests.get(check_url, params=check_params).json()
+        print(f"DEBUG: GetTemplateList response: {check_res}")
         
-        # בימות המשיח התשובה נמצאת ב-data או fullData תלוי בגרסה
-        is_exists = response.get('data') and len(response.get('data')) > 0
+        # בדיקה אם המספר קיים (בודקים ב-data)
+        is_exists = check_res.get('data') and len(check_res.get('data')) > 0
         
         update_url = f"{YM_API_URL}UpdateTemplateList"
         
         if not is_exists:
+            # הוספה כפעיל
             action_params = {
                 'token': YM_TOKEN, 'templateId': TEMPLATE_ID,
                 'phone': phone_to_check, 'active': '1', 'action': 'add'
             }
             msg = "המספר של המקליט נוסף לרשימה"
         else:
+            # עדכון לחסום (active=0)
             action_params = {
                 'token': YM_TOKEN, 'templateId': TEMPLATE_ID,
                 'phone': phone_to_check, 'active': '0', 'action': 'update'
             }
             msg = "המספר של המקליט עודכן כחסום"
 
-        requests.get(update_url, params=action_params)
+        final_res = requests.get(update_url, params=action_params).json()
+        print(f"DEBUG: Update result: {final_res}")
+
         return f"say_hebrew={msg}&hangup"
 
     except Exception as e:
         print(f"ERROR: {str(e)}")
-        return "say_hebrew=שגיאה בתהליך חילוץ הנתונים&hangup"
+        return "say_hebrew=ארעה שגיאה בחיבור למערכת הנתונים&hangup"
 
 if __name__ == '__main__':
-    app.run()
+    # Render משתמש בפורט שמוגדר במשתני הסביבה
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
